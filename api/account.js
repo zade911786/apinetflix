@@ -1,6 +1,5 @@
 // api/account.js
 function extractCookies(text) {
-  // Same extract function as in generate.js – sirf NetflixId chahiye
   const keys = ['NetflixId', 'SecureNetflixId', 'nfvdid', 'OptanonConsent'];
   const cookies = {};
   try {
@@ -58,51 +57,55 @@ async function handler(req, res) {
   if (!trimmedCookie) return res.status(400).json({ error: 'No cookie provided.' });
 
   const cookie_dict = extractCookies(trimmedCookie);
-  if (!cookie_dict.NetflixId) {
-    return res.status(400).json({ error: 'Missing NetflixId in cookie data.' });
-  }
+  if (!cookie_dict.NetflixId) return res.status(400).json({ error: 'Missing NetflixId.' });
 
   try {
-    // Use Netflix's Shakti API – works with just NetflixId!
-    const apiURL = 'https://www.netflix.com/api/shakti/v1/account';
-    const response = await fetch(apiURL, {
+    // Fetch /YourAccount using Argo mobile headers (same as in generate)
+    const response = await fetch('https://www.netflix.com/YourAccount', {
       method: 'GET',
       headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-        'Accept': 'application/json, text/plain, */*',
-        'Accept-Language': 'en-US,en;q=0.9',
+        'User-Agent': 'Argo/15.48.1 (iPhone; iOS 15.8.5; Scale/2.00)',  // Argo user-agent
+        'Accept': 'text/html,application/xhtml+xml',
+        'Accept-Language': 'en-US,en;q=0.5',
         'Cookie': `NetflixId=${cookie_dict.NetflixId}`,
-        'x-netflix.request.attempt': '1',
-        'x-netflix.request.client.user.guid': cookie_dict.NetflixId,
-        'x-netflix.context.profile-guid': cookie_dict.NetflixId,
       },
+      redirect: 'manual',
     });
 
-    if (response.status === 401 || response.status === 403) {
-      return res.json({ error: 'NetflixId expired or invalid.', expired: true });
+    if ([301, 302, 303, 307, 308].includes(response.status) || response.status === 401 || response.status === 403) {
+      return res.json({ error: 'Cookie expired or invalid.', expired: true });
     }
     if (!response.ok) {
-      return res.status(response.status).json({ error: `Netflix API returned ${response.status}` });
+      return res.status(response.status).json({ error: `Netflix returned HTTP ${response.status}` });
     }
 
-    const data = await response.json();
+    const html = await response.text();
 
-    // Extract fields from Shakti response
-    const user = data?.user || data?.account || {};
-    const planInfo = data?.planInfo || user?.planInfo || {};
-    const paymentInfo = data?.payment || user?.payment || {};
+    // Extract reactContext JSON
+    const reactContextMatch = html.match(/netflix\.reactContext\s*=\s*(\{.*?\});/s);
+    if (!reactContextMatch || !reactContextMatch[1]) {
+      return res.json({ error: 'Could not extract account data. Maybe Netflix blocked mobile view.' });
+    }
 
-    const email = user.email || 'N/A';
-    const country = user.countryOfSignup || user.region || 'N/A';
-    const memberSince = user.membershipStartDate || planInfo.memberSince || 'N/A';
-    const membershipStatus = user.membershipStatus || 'CURRENT_MEMBER';
-    const planName = planInfo.planName || planInfo.plan || 'N/A';
-    const price = planInfo.price || planInfo.planPrice || 'N/A';
-    const currency = planInfo.currency || 'USD';
-    const paymentMethod = paymentInfo.paymentMethod || paymentInfo.type || 'N/A';
-    const phone = user.phone || user.phoneNumber || 'N/A';
-    const renewalDate = planInfo.renewalDate || 'N/A';
-    const profilesArray = user.profiles || data?.profiles || [];
+    let jsonStr = reactContextMatch[1].replace(/&quot;/g, '"').replace(/&#x27;/g, "'");
+    const reactContext = JSON.parse(jsonStr);
+    const models = reactContext?.models || {};
+
+    const userInfo = models.userInfo?.data || {};
+    const membershipPlan = models.membershipPlan?.data || {};
+    const signupContext = models.signupContext?.data || {};
+
+    const email = userInfo.emailAddress || userInfo.email || 'N/A';
+    const country = userInfo.countryOfSignup || 'N/A';
+    const memberSince = userInfo.memberSince || 'N/A';
+    const membershipStatus = userInfo.membershipStatus || 'N/A';
+    const planName = membershipPlan.planName || membershipPlan.name || 'N/A';
+    const planPrice = membershipPlan.planPrice || membershipPlan.price || 'N/A';
+    const currency = membershipPlan.currency || 'USD';
+    const paymentMethod = membershipPlan.paymentMethod || userInfo.paymentMethod || 'N/A';
+    const phone = userInfo.phoneNumber || userInfo.phone || 'N/A';
+    const renewalDate = membershipPlan.renewalDate || signupContext.renewalDate || 'N/A';
+    const profilesArray = userInfo.profiles || membershipPlan.profiles || [];
     const profileNames = Array.isArray(profilesArray) ? profilesArray.map(p => p.name || p).join(', ') : 'N/A';
     const profilesCount = Array.isArray(profilesArray) ? profilesArray.length : 'N/A';
 
@@ -114,13 +117,12 @@ async function handler(req, res) {
       member_since: memberSince,
       membership_status: membershipStatus === 'CURRENT_MEMBER' ? 'Active' : 'Inactive',
       plan: planName,
-      price: price !== 'N/A' ? `${currency} ${price}` : 'N/A',
+      price: planPrice !== 'N/A' ? `${currency} ${planPrice}` : 'N/A',
       renewal_date: renewalDate,
       payment_method: paymentMethod,
       phone,
       profiles_count: profilesCount,
       profile_names: profileNames,
-      // legacy fields for your bot
       x_mail: email,
       x_loc: country,
       x_tier: planName,
@@ -132,7 +134,7 @@ async function handler(req, res) {
     });
   } catch (error) {
     console.error('Account API error:', error);
-    return res.status(500).json({ error: 'Server error while fetching account details.' });
+    return res.status(500).json({ error: 'Server error fetching account details.' });
   }
 }
 
