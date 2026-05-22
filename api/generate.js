@@ -151,7 +151,7 @@ function parsePayment(account) {
   return { type: payMethod || 'N/A', lastFourDigits: 'N/A', expiry: 'N/A' };
 }
 
-export default async function handler(req, res) {
+async function handler(req, res) {
   // CORS
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
@@ -194,7 +194,7 @@ export default async function handler(req, res) {
       model: 'saget',
       modelType: 'IPHONE8-1',
       odpAware: 'true',
-      path: '["user","account","token","default"]',  // Include user + account for full details
+      path: '["user","account","token","default"]',  // includes user + account
       pathFormat: 'graph',
       pixelDensity: '2.0',
       progressive: 'false',
@@ -290,7 +290,7 @@ export default async function handler(req, res) {
 
     const data = await apiResponse.json();
 
-    // Extract token
+    // Token extraction
     const token_data = data?.value?.account?.token?.default || {};
     const token = token_data.token;
     let expires = token_data.expires;
@@ -329,20 +329,18 @@ export default async function handler(req, res) {
     const profileNames = profilesArray.map(p => p.profileName || p.name).filter(Boolean).join(', ') || 'N/A';
     const profilesCount = profilesArray.length || 'N/A';
     const membershipStatus = user.membershipStatus || 'CURRENT_MEMBER';
-    const status = membershipStatus === 'CURRENT_MEMBER' ? 'Active' : 'Inactive';
+    const statusText = membershipStatus === 'CURRENT_MEMBER' ? 'Active' : 'Inactive';
 
-    // Build full response (matching previous format + legacy)
     const response = {
       status: "SUCCESS",
       url: login_url,
       expires_ts: Number(expires),
       expires: new Date(Number(expires) * 1000).toISOString().replace('T', ' ').split('.')[0],
-      // Structured account details
       account: {
         email,
         phone,
         country: country_display,
-        membershipStatus: status,
+        membershipStatus: statusText,
         memberSince,
         plan: {
           name: planDisplay,
@@ -355,7 +353,7 @@ export default async function handler(req, res) {
           names: profileNames
         }
       },
-      // Legacy flat fields (backward compatible)
+      // legacy fields
       email: email,
       country: countryCode,
       country_display: country_display,
@@ -378,7 +376,6 @@ export default async function handler(req, res) {
     };
 
     return res.json(response);
-
   } catch (error) {
     console.error('Function error:', error);
     return res.status(500).json({
@@ -386,4 +383,6 @@ export default async function handler(req, res) {
       cookie: trimmedCookie.substring(0, 100)
     });
   }
-  }
+}
+
+module.exports = handler;
