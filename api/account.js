@@ -1,5 +1,54 @@
 // api/account.js
+
+function extractAllCookies(text) {
+  // Returns an object of all cookie name-value pairs from any format
+  const cookies = {};
+
+  // 1. JSON array or object
+  try {
+    const json = JSON.parse(text);
+    if (Array.isArray(json) && json.length && json[0]?.name) {
+      json.forEach(c => { cookies[c.name] = c.value; });
+    } else if (json && typeof json === 'object') {
+      Object.keys(json).forEach(k => { cookies[k] = json[k]; });
+    }
+  } catch (e) {}
+
+  // 2. Netscape format (tab-separated)
+  if (text.includes('\t')) {
+    const lines = text.split(/\r\n|\r|\n/);
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed[0] === '#') continue;
+      const parts = trimmed.split('\t');
+      if (parts.length >= 7) {
+        const name = parts[5].trim();
+        const value = parts[6].trim();
+        cookies[name] = value;
+      }
+    }
+  }
+
+  // 3. Universal key=value pairs (semicolon/newline separated)
+  const segments = text.split(/[;\n\r]+/);
+  for (let segment of segments) {
+    segment = segment.trim();
+    if (!segment) continue;
+    if (segment.toLowerCase().startsWith('cookie:')) {
+      segment = segment.substring(7).trim();
+    }
+    const eqPos = segment.indexOf('=');
+    if (eqPos === -1) continue;
+    const key = segment.substring(0, eqPos).trim();
+    const value = segment.substring(eqPos + 1).trim().replace(/;+$/, '');
+    cookies[key] = value;  // later occurrences will overwrite, but that's fine
+  }
+
+  return cookies;
+}
+
 async function handler(req, res) {
+  // CORS
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
@@ -10,22 +59,31 @@ async function handler(req, res) {
   const trimmedCookie = (raw_cookie || '').trim();
   if (!trimmedCookie) return res.status(400).json({ error: 'No cookie provided.' });
 
+  // Extract all cookies from input (not just NetflixId)
+  const allCookies = extractAllCookies(trimmedCookie);
+
+  // Build Cookie header string: key=value; key=value; ...
+  const cookieString = Object.entries(allCookies)
+    .map(([k, v]) => `${k}=${v}`)
+    .join('; ');
+
+  if (!cookieString) return res.status(400).json({ error: 'No valid cookies found.' });
+
   try {
-    // Step 1: Scrape /YourAccount page
     const response = await fetch('https://www.netflix.com/YourAccount', {
       method: 'GET',
       headers: {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        'Accept': 'text/html,application/xhtml+xml',
-        'Accept-Language': 'en-US,en;q=0.9',
-        'Cookie': trimmedCookie,
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+        'Accept-Language': 'en-US,en;q=0.5',
+        'Cookie': cookieString,  // <-- full cookie string
       },
       redirect: 'manual',
     });
 
-    // If redirected to login, cookie is invalid
+    // Redirect means invalid session
     if ([301, 302, 303, 307, 308].includes(response.status) || response.status === 401 || response.status === 403) {
-      return res.json({ error: 'Cookie expired or invalid.' });
+      return res.json({ error: 'Cookie expired or invalid. Send all browser cookies.', expired: true });
     }
 
     if (!response.ok) {
@@ -34,60 +92,61 @@ async function handler(req, res) {
 
     const html = await response.text();
 
-    // Step 2: Extract netflix.reactContext JSON
-    const reactContextMatch = html.match(/netflix\.reactContext\s*=\s*({.*?});/s);
-    if (!reactContextMatch) {
-      return res.json({ error: 'Could not extract account data from page.' });
+    // Extract netflix.reactContext JSON
+    const reactContextMatch = html.match(/netflix\.reactContext\s*=\s*(\{.*?\});/s);
+    if (!reactContextMatch || !reactContextMatch[1]) {
+      return res.json({ error: 'Could not extract account data. Page structure changed?' });
     }
 
-    let jsonStr = reactContextMatch[1];
-    // Unescape HTML entities
-    jsonStr = jsonStr.replace(/&quot;/g, '"').replace(/&#x27;/g, "'").replace(/\\x([0-9A-Fa-f]{2})/g, (_, hex) => String.fromCharCode(parseInt(hex, 16)));
-
+    let jsonStr = reactContextMatch[1].replace(/&quot;/g, '"').replace(/&#x27;/g, "'");
     const reactContext = JSON.parse(jsonStr);
-    const userInfo = reactContext?.models?.userInfo?.data || {};
-    const signupContext = reactContext?.models?.signupContext?.data || {};
-    const membershipPlan = reactContext?.models?.membershipPlan?.data || {};
+    const models = reactContext?.models || {};
 
-    // Step 3: Extract all available fields
-    const email = userInfo.emailAddress || 'N/A';
+    const userInfo = models.userInfo?.data || {};
+    const membershipPlan = models.membershipPlan?.data || {};
+    const signupContext = models.signupContext?.data || {};
+
+    const email = userInfo.emailAddress || userInfo.email || 'N/A';
     const country = userInfo.countryOfSignup || 'N/A';
     const memberSince = userInfo.memberSince || 'N/A';
-    const userGuid = userInfo.userGuid || 'N/A';
     const membershipStatus = userInfo.membershipStatus || 'N/A';
     const planName = membershipPlan.planName || membershipPlan.name || 'N/A';
     const planPrice = membershipPlan.planPrice || membershipPlan.price || 'N/A';
+    const currency = membershipPlan.currency || 'USD';
     const paymentMethod = membershipPlan.paymentMethod || userInfo.paymentMethod || 'N/A';
     const phone = userInfo.phoneNumber || userInfo.phone || 'N/A';
-    const profiles = userInfo.profiles || membershipPlan.profiles || [];
+    const renewalDate = membershipPlan.renewalDate || signupContext.renewalDate || 'N/A';
+
+    const profilesArray = userInfo.profiles || membershipPlan.profiles || [];
+    const profileNames = Array.isArray(profilesArray) ? profilesArray.map(p => p.name || p).join(', ') : 'N/A';
+    const profilesCount = Array.isArray(profilesArray) ? profilesArray.length : 'N/A';
 
     return res.json({
       status: "SUCCESS",
       email,
       country,
+      country_display: country !== 'N/A' ? `${country}` : 'N/A',
       member_since: memberSince,
-      user_guid: userGuid,
       membership_status: membershipStatus === 'CURRENT_MEMBER' ? 'Active' : 'Inactive',
       plan: planName,
-      price: planPrice,
+      price: planPrice !== 'N/A' ? `${currency} ${planPrice}` : 'N/A',
+      renewal_date: renewalDate,
       payment_method: paymentMethod,
       phone,
-      profiles_count: Array.isArray(profiles) ? profiles.length : 'N/A',
-      profile_names: Array.isArray(profiles) ? profiles.map(p => p.name || p).join(', ') : 'N/A',
-      // Legacy fields for bot compatibility
+      profiles_count: profilesCount,
+      profile_names: profileNames,
       x_mail: email,
       x_loc: country,
       x_tier: planName,
-      x_ren: membershipPlan.renewalDate || 'N/A',
+      x_ren: renewalDate,
       x_mem: memberSince,
       x_bil: paymentMethod,
       x_tel: phone,
-      x_usr: Array.isArray(profiles) ? profiles.map(p => p.name || p).join(', ') : 'N/A',
+      x_usr: profileNames,
     });
-
   } catch (error) {
     console.error('Account API error:', error);
-    return res.status(500).json({ error: 'Server error fetching account details.' });
+    return res.status(500).json({ error: 'Server error while fetching account details.' });
   }
 }
 
