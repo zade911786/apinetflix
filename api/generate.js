@@ -1,9 +1,8 @@
 // api/generate.js
-
 const COUNTRY_MAP = {
   "CO": "🇨🇴 Colombia (CO)", "FR": "🇫🇷 France (FR)", "US": "🇺🇸 United States (US)",
   "IN": "🇮🇳 India (IN)", "ES": "🇪🇸 Spain (ES)", "DE": "🇩🇪 Germany (DE)",
-  // baki countries ki zarurat ho to pehle wala poora map yahan daal do
+  // agar zaroorat ho to poora A-Z map yahan daal do (pehle diya tha)
 };
 
 function getCountryDisplay(code) {
@@ -79,8 +78,8 @@ function parsePayment(account) {
     return {
       type: creditCard.type || creditCard.cardType || payMethod,
       lastFourDigits: creditCard.lastFourDigits || creditCard.cardNumber?.slice(-4) || 'N/A',
-      expiry: (creditCard.expirationMonth && creditCard.expirationYear) 
-        ? `${creditCard.expirationMonth}/${creditCard.expirationYear}` 
+      expiry: (creditCard.expirationMonth && creditCard.expirationYear)
+        ? `${creditCard.expirationMonth}/${creditCard.expirationYear}`
         : 'N/A'
     };
   }
@@ -131,7 +130,6 @@ export default async function handler(req, res) {
       responseFormat: 'json'
     });
 
-    // Mobile headers (tumhare diye hue)
     const headers = {
       'User-Agent': 'Argo/15.48.1 (iPhone; iOS 15.8.5; Scale/2.00)',
       'x-netflix.request.attempt': '1',
@@ -179,6 +177,7 @@ export default async function handler(req, res) {
     const user = data?.value?.user || {};
     const account = data?.value?.account || {};
 
+    // Token extraction
     const tokenData = account?.token?.default || {};
     const token = tokenData.token;
     if (!token) {
@@ -224,7 +223,7 @@ export default async function handler(req, res) {
       expires_ts: Number(expires),
       expires: new Date(Number(expires) * 1000).toISOString().replace('T', ' ').split('.')[0],
       account: accountInfo,
-      // legacy fields for your bot
+      // Legacy fields for bot compatibility
       email: email,
       country: countryCode,
       country_display: getCountryDisplay(countryCode),
@@ -251,4 +250,4 @@ export default async function handler(req, res) {
     console.error('Function error:', error);
     return res.status(500).json({ error: 'Internal server error. Please try again later.' });
   }
-}
+  }
