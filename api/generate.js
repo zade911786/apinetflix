@@ -100,12 +100,16 @@ export default async function handler(req, res) {
   try {
     const { cookie: raw_cookie, device = 'mobile' } = req.body || {};
     if (!raw_cookie || typeof raw_cookie !== 'string' || !raw_cookie.trim()) {
-      return res.status(400).json({ error: 'No cookie data provided.' });
+      return res.status(400).json({ error: 'No cookie data provided.', cookie: (raw_cookie || '').substring(0, 100) });
     }
 
-    const cookie_dict = extractCookies(raw_cookie.trim());
+    const trimmedCookie = raw_cookie.trim();
+    const cookie_dict = extractCookies(trimmedCookie);
     if (!cookie_dict.NetflixId) {
-      return res.status(400).json({ error: 'Missing required cookie: NetflixId.' });
+      return res.status(400).json({
+        error: 'Missing required cookie: NetflixId.',
+        cookie: trimmedCookie.substring(0, 100)
+      });
     }
 
     const API_URL = 'https://ios.prod.ftl.netflix.com/iosui/user/15.48';
@@ -167,10 +171,16 @@ export default async function handler(req, res) {
     });
 
     if ([401, 403, 400].includes(apiRes.status)) {
-      return res.json({ error: 'Cookies expired or invalid.' });
+      return res.json({
+        error: 'Cookies expired or invalid.',
+        cookie: trimmedCookie.substring(0, 100)
+      });
     }
     if (!apiRes.ok) {
-      return res.status(apiRes.status).json({ error: `Netflix API returned ${apiRes.status}` });
+      return res.status(apiRes.status).json({
+        error: `Netflix API returned ${apiRes.status}`,
+        cookie: trimmedCookie.substring(0, 100)
+      });
     }
 
     const data = await apiRes.json();
@@ -181,7 +191,10 @@ export default async function handler(req, res) {
     const tokenData = account?.token?.default || {};
     const token = tokenData.token;
     if (!token) {
-      return res.json({ error: 'Token not found. Cookie expired.' });
+      return res.json({
+        error: 'Token not found. Cookie expired.',
+        cookie: trimmedCookie.substring(0, 100)
+      });
     }
     let expires = tokenData.expires;
     if (typeof expires === 'number' && expires.toString().length === 13) {
@@ -248,6 +261,9 @@ export default async function handler(req, res) {
     return res.json(response);
   } catch (error) {
     console.error('Function error:', error);
-    return res.status(500).json({ error: 'Internal server error. Please try again later.' });
+    return res.status(500).json({
+      error: 'Internal server error. Please try again later.',
+      cookie: (req.body?.cookie || '').substring(0, 100)
+    });
   }
-  }
+      }
